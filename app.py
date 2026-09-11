@@ -1,32 +1,42 @@
 import os
-import json
+import uuid
 from flask import Flask, render_template_string, request, jsonify
-from pymongo import MongoClient
+import boto3
 
 app = Flask(__name__)
 
-# MongoDB Configuration
-MONGO_URI = "mongodb+srv://pawandevprasad8_db_user:12300pawandevprasad03112010@cluster0.xmjo7lc.mongodb.net/?appName=Cluster0"
-DB_NAME = "BUY_PROPERTY_KOLKATA"
-COLLECTION_NAME = "KOLKATA_LISTING"
+# ------------------- AWS DYNAMODB CONFIGURATION -------------------
+AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1") # Default: Mumbai Region
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
+DYNAMODB_TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME", "BUY_PROPERTY")
 
-# Connect to MongoDB
+# Connect to AWS DynamoDB
 try:
-    client = MongoClient(MONGO_URI)
-    db = client[DB_NAME]
-    collection = db[COLLECTION_NAME]
-    print("MongoDB से कनेक्शन सफल रहा!")
-except Exception as e:
-    print("MongoDB कनेक्शन में त्रुटि:", e)
+    if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+        dynamodb = boto3.resource(
+            'dynamodb',
+            region_name=AWS_REGION,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY
+        )
+    else:
+        # Local system AWS credentials fallback
+        dynamodb = boto3.resource('dynamodb', region_name=AWS_REGION)
 
-# HTML Template
+    table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+    print("DynamoDB connection successful!")
+except Exception as e:
+    print("DynamoDB connection error:", e)
+
+# ------------------- HTML TEMPLATE -------------------
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="hi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MongoDB JSON Inserter</title>
+    <title>DynamoDB JSON Inserter</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -58,7 +68,7 @@ HTML_TEMPLATE = """
         }
         button {
             margin-top: 15px;
-            background-color: #00684a;
+            background-color: #ff9900;
             color: white;
             border: none;
             padding: 12px 20px;
@@ -69,7 +79,7 @@ HTML_TEMPLATE = """
             font-weight: bold;
         }
         button:hover {
-            background-color: #005139;
+            background-color: #e68a00;
         }
         #result {
             margin-top: 20px;
@@ -93,12 +103,12 @@ HTML_TEMPLATE = """
 <body>
 
 <div class="container">
-    <h2>MongoDB में JSON डेटा सेव करें</h2>
-    <p>अपना JSON डेटा नीचे बॉक्स में पेस्ट करें:</p>
+    <h2>DynamoDB me JSON Data Save Karein</h2>
+    <p>Apna JSON data niche box me paste karein:</p>
     
     <form id="jsonForm">
         <textarea id="jsonData" placeholder='{\n  "property_name": "3 BHK Apartment",\n  "location": "Kolkata",\n  "price": "5500000"\n}' required></textarea>
-        <button type="submit">Submit to MongoDB</button>
+        <button type="submit">Submit to DynamoDB</button>
     </form>
 
     <div id="result"></div>
@@ -116,7 +126,7 @@ document.getElementById('jsonForm').addEventListener('submit', async function(e)
     } catch (err) {
         resultDiv.className = 'error';
         resultDiv.style.display = 'block';
-        resultDiv.innerHTML = '<strong>त्रुटि:</strong> आपका JSON फ़ॉर्मेट सही नहीं है!';
+        resultDiv.innerHTML = '<strong>Truti:</strong> Aapka JSON format sahi nahi hai!';
         return;
     }
 
@@ -135,14 +145,14 @@ document.getElementById('jsonForm').addEventListener('submit', async function(e)
 
         if (data.status === 'success') {
             resultDiv.className = 'success';
-            resultDiv.innerHTML = `<strong>सफलतापूर्वक सेव हुआ!</strong><br>Generated Document ID: <code>${data.inserted_id}</code>`;
+            resultDiv.innerHTML = `<strong>Safaltapoorvak Save Hua!</strong><br>Generated Property ID: <code>${data.inserted_id}</code>`;
         } else {
             resultDiv.className = 'error';
-            resultDiv.innerHTML = `<strong>त्रुटि:</strong> ${data.message}`;
+            resultDiv.innerHTML = `<strong>Truti:</strong> ${data.message}`;
         }
     } catch (error) {
         resultDiv.className = 'error';
-        resultDiv.innerHTML = `<strong>सर्वर त्रुटि:</strong> डेटा भेजा नहीं जा सका।`;
+        resultDiv.innerHTML = `<strong>Server Truti:</strong> Data bheja nahi ja saka.`;
     }
 
     resultDiv.style.display = 'block';
@@ -153,6 +163,7 @@ document.getElementById('jsonForm').addEventListener('submit', async function(e)
 </html>
 """
 
+# ------------------- ROUTES -------------------
 @app.route('/')
 def home():
     return render_template_string(HTML_TEMPLATE)
@@ -163,13 +174,21 @@ def insert_data():
         data = request.get_json(force=True)
         
         if not data:
-            return jsonify({'status': 'error', 'message': 'JSON खाली है या अमान्य है'}), 400
+            return jsonify({'status': 'error', 'message': 'JSON khali hai ya amanya hai'}), 400
 
-        result = collection.insert_one(data)
+        # DynamoDB Primary Key Validation
+        # Agar JSON me property_id nahi hai, toh ek unique UUID auto-generate ho jayega
+        if 'property_id' not in data or not str(data['property_id']).strip():
+            data['property_id'] = str(uuid.uuid4())
+        else:
+            data['property_id'] = str(data['property_id'])
+
+        # DynamoDB me Item Insert karein
+        table.put_item(Item=data)
 
         return jsonify({
             'status': 'success',
-            'inserted_id': str(result.inserted_id)
+            'inserted_id': data['property_id']
         }), 200
 
     except Exception as e:
@@ -178,4 +197,4 @@ def insert_data():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
+    
